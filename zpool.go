@@ -169,13 +169,21 @@ func ListZpools() ([]*Zpool, error) {
 }
 
 // Status retrieves the status information of a ZFS pool using 'zpool status'
+// Uses default parsable=false to show exact bytes without unit conversion
 func (z *Zpool) Status() (*ZpoolStatus, error) {
-	return GetZpoolStatus(z.Name)
+	return GetZpoolStatus(z.Name, false)
 }
 
 // GetZpoolStatus retrieves the status information of a ZFS pool by name using JSON format
-func GetZpoolStatus(name string) (*ZpoolStatus, error) {
-	cmd := exec.Command("zpool", "status", "--json", name)
+// parsable controls whether to show exact byte values (true) or human-readable units (false)
+// When parsable is false (default), uses -p flag to show exact bytes without unit conversion
+func GetZpoolStatus(name string, parsable bool) (*ZpoolStatus, error) {
+	args := []string{"status", "--json"}
+	if !parsable {
+		args = append(args, "-p")
+	}
+	args = append(args, name)
+	cmd := exec.Command("zpool", args...)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
@@ -195,8 +203,14 @@ func GetZpoolStatus(name string) (*ZpoolStatus, error) {
 }
 
 // ListPoolStatus retrieves the status information for all ZFS pools using JSON format
-func ListPoolStatus() ([]*ZpoolStatus, error) {
-	cmd := exec.Command("zpool", "status", "--json")
+// parsable controls whether to show exact byte values (true) or human-readable units (false)
+// When parsable is false (default), uses -p flag to show exact bytes without unit conversion
+func ListPoolStatus(parsable bool) ([]*ZpoolStatus, error) {
+	args := []string{"status", "--json"}
+	if !parsable {
+		args = append(args, "-p")
+	}
+	cmd := exec.Command("zpool", args...)
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, err
