@@ -207,6 +207,36 @@ func GetZpoolStatus(name string) (*ZpoolStatus, error) {
 	}
 
 	// Populate convenience fields for backward compatibility
+	processPoolStatus(status)
+
+	return status, nil
+}
+
+// ListPoolStatus retrieves the status information for all ZFS pools using JSON format
+func ListPoolStatus() ([]*ZpoolStatus, error) {
+	cmd := exec.Command("zpool", "status", "--json")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var jsonStatus ZpoolStatusJSON
+	if err := json.Unmarshal(output, &jsonStatus); err != nil {
+		return nil, err
+	}
+
+	pools := make([]*ZpoolStatus, 0, len(jsonStatus.Pools))
+	for _, status := range jsonStatus.Pools {
+		// Populate convenience fields for backward compatibility
+		processPoolStatus(status)
+		pools = append(pools, status)
+	}
+
+	return pools, nil
+}
+
+// processPoolStatus populates convenience fields for a pool status
+func processPoolStatus(status *ZpoolStatus) {
 	status.Pool = status.Name
 	if status.ErrorCount == "0" {
 		status.Errors = "No known data errors"
@@ -215,12 +245,10 @@ func GetZpoolStatus(name string) (*ZpoolStatus, error) {
 	}
 
 	// Set up root vdev as Config for backward compatibility
-	if rootVdev, exists := status.Vdevs[name]; exists {
+	if rootVdev, exists := status.Vdevs[status.Name]; exists {
 		status.Config = rootVdev
 		populateVdevConvenienceFields(rootVdev)
 	}
-
-	return status, nil
 }
 
 // populateVdevConvenienceFields recursively populates convenience fields for backward compatibility
