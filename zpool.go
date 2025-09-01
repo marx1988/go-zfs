@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
-	"strconv"
 )
 
 // ZFS zpool states, which can indicate if a pool is online, offline, degraded, etc.
@@ -122,12 +121,6 @@ type ZpoolVdev struct {
 	ChecksumErrors string                `json:"checksum_errors"`
 	SlowIOs        string                `json:"slow_ios,omitempty"`
 	Vdevs          map[string]*ZpoolVdev `json:"vdevs,omitempty"`
-	// Convenience fields for backward compatibility and easier access
-	ReadErrs    uint64
-	WriteErrs   uint64
-	CksumErrs   uint64
-	SlowIOCount uint64
-	Children    []*ZpoolVdev
 }
 
 // ZpoolStatus represents the status information of a ZFS pool
@@ -140,14 +133,6 @@ type ZpoolStatus struct {
 	ZPLVersion string                `json:"zpl_version"`
 	Vdevs      map[string]*ZpoolVdev `json:"vdevs"`
 	ErrorCount string                `json:"error_count"`
-	// Convenience fields for backward compatibility
-	Pool   string
-	Status string
-	Action string
-	See    string
-	Scrub  string
-	Config *ZpoolVdev
-	Errors string
 }
 
 // ZpoolStatusJSON represents the JSON output structure from 'zpool status --json'
@@ -206,9 +191,6 @@ func GetZpoolStatus(name string) (*ZpoolStatus, error) {
 		return nil, fmt.Errorf("pool %s not found in status output", name)
 	}
 
-	// Populate convenience fields for backward compatibility
-	processPoolStatus(status)
-
 	return status, nil
 }
 
@@ -227,50 +209,9 @@ func ListPoolStatus() ([]*ZpoolStatus, error) {
 
 	pools := make([]*ZpoolStatus, 0, len(jsonStatus.Pools))
 	for _, status := range jsonStatus.Pools {
-		// Populate convenience fields for backward compatibility
-		processPoolStatus(status)
 		pools = append(pools, status)
 	}
 
 	return pools, nil
 }
 
-// processPoolStatus populates convenience fields for a pool status
-func processPoolStatus(status *ZpoolStatus) {
-	status.Pool = status.Name
-	if status.ErrorCount == "0" {
-		status.Errors = "No known data errors"
-	} else {
-		status.Errors = status.ErrorCount + " data errors"
-	}
-
-	// Set up root vdev as Config for backward compatibility
-	if rootVdev, exists := status.Vdevs[status.Name]; exists {
-		status.Config = rootVdev
-		populateVdevConvenienceFields(rootVdev)
-	}
-}
-
-// populateVdevConvenienceFields recursively populates convenience fields for backward compatibility
-func populateVdevConvenienceFields(vdev *ZpoolVdev) {
-	// Convert error counts from string to uint64 for backward compatibility
-	vdev.ReadErrs, _ = parseErrorCount(vdev.ReadErrors)
-	vdev.WriteErrs, _ = parseErrorCount(vdev.WriteErrors)
-	vdev.CksumErrs, _ = parseErrorCount(vdev.ChecksumErrors)
-	vdev.SlowIOCount, _ = parseErrorCount(vdev.SlowIOs)
-
-	// Convert map to slice for Children field (backward compatibility)
-	vdev.Children = make([]*ZpoolVdev, 0, len(vdev.Vdevs))
-	for _, child := range vdev.Vdevs {
-		populateVdevConvenienceFields(child)
-		vdev.Children = append(vdev.Children, child)
-	}
-}
-
-// parseErrorCount converts error count string to uint64
-func parseErrorCount(errorStr string) (uint64, error) {
-	if errorStr == "" || errorStr == "-" {
-		return 0, nil
-	}
-	return strconv.ParseUint(errorStr, 10, 64)
-}
