@@ -1,5 +1,12 @@
 package zfs
 
+import (
+	"encoding/json"
+	"fmt"
+	"os/exec"
+	"strconv"
+)
+
 // ZFS zpool states, which can indicate if a pool is online, offline, degraded, etc.
 //
 // More information regarding zpool states can be found in the ZFS manual:
@@ -95,6 +102,67 @@ func (z *Zpool) Destroy() error {
 	return err
 }
 
+// ZpoolVdev represents a vdev (virtual device) in a ZFS pool
+type ZpoolVdev struct {
+	Name           string                `json:"name"`
+	VdevType       string                `json:"vdev_type"`
+	GUID           string                `json:"guid"`
+	Class          string                `json:"class"`
+	State          string                `json:"state"`
+	Path           string                `json:"path,omitempty"`
+	PhysPath       string                `json:"phys_path,omitempty"`
+	DevID          string                `json:"devid,omitempty"`
+	AllocSpace     string                `json:"alloc_space,omitempty"`
+	TotalSpace     string                `json:"total_space,omitempty"`
+	DefSpace       string                `json:"def_space,omitempty"`
+	RepDevSize     string                `json:"rep_dev_size,omitempty"`
+	PhysSpace      string                `json:"phys_space,omitempty"`
+	ReadErrors     string                `json:"read_errors"`
+	WriteErrors    string                `json:"write_errors"`
+	ChecksumErrors string                `json:"checksum_errors"`
+	SlowIOs        string                `json:"slow_ios,omitempty"`
+	Vdevs          map[string]*ZpoolVdev `json:"vdevs,omitempty"`
+	// Convenience fields for backward compatibility and easier access
+	ReadErrs    uint64
+	WriteErrs   uint64
+	CksumErrs   uint64
+	SlowIOCount uint64
+	Children    []*ZpoolVdev
+}
+
+// ZpoolStatus represents the status information of a ZFS pool
+type ZpoolStatus struct {
+	Name       string                `json:"name"`
+	State      string                `json:"state"`
+	PoolGUID   string                `json:"pool_guid"`
+	TXG        string                `json:"txg"`
+	SPAVersion string                `json:"spa_version"`
+	ZPLVersion string                `json:"zpl_version"`
+	Vdevs      map[string]*ZpoolVdev `json:"vdevs"`
+	ErrorCount string                `json:"error_count"`
+	// Convenience fields for backward compatibility
+	Pool   string
+	Status string
+	Action string
+	See    string
+	Scrub  string
+	Config *ZpoolVdev
+	Errors string
+}
+
+// ZpoolStatusJSON represents the JSON output structure from 'zpool status --json'
+type ZpoolStatusJSON struct {
+	OutputVersion OutputVersion           `json:"output_version"`
+	Pools         map[string]*ZpoolStatus `json:"pools"`
+}
+
+// OutputVersion represents version information in JSON output
+type OutputVersion struct {
+	Command   string `json:"command"`
+	VersMajor int    `json:"vers_major"`
+	VersMinor int    `json:"vers_minor"`
+}
+
 // ListZpools list all ZFS zpools accessible on the current system.
 func ListZpools() ([]*Zpool, error) {
 	args := []string{"list", "-Ho", "name"}
@@ -113,4 +181,68 @@ func ListZpools() ([]*Zpool, error) {
 		pools = append(pools, z)
 	}
 	return pools, nil
+}
+
+// Status retrieves the status information of a ZFS pool using 'zpool status'
+func (z *Zpool) Status() (*ZpoolStatus, error) {
+	return GetZpoolStatus(z.Name)
+}
+
+// GetZpoolStatus retrieves the status information of a ZFS pool by name using JSON format
+func GetZpoolStatus(name string) (*ZpoolStatus, error) {
+	cmd := exec.Command("zpool", "status", "--json", name)
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var jsonStatus ZpoolStatusJSON
+	if err := json.Unmarshal(output, &jsonStatus); err != nil {
+		return nil, err
+	}
+
+	status, exists := jsonStatus.Pools[name]
+	if !exists {
+		return nil, fmt.Errorf("pool %s not found in status output", name)
+	}
+
+	// Populate convenience fields for backward compatibility
+	status.Pool = status.Name
+	if status.ErrorCount == "0" {
+		status.Errors = "No known data errors"
+	} else {
+		status.Errors = status.ErrorCount + " data errors"
+	}
+
+	// Set up root vdev as Config for backward compatibility
+	if rootVdev, exists := status.Vdevs[name]; exists {
+		status.Config = rootVdev
+		populateVdevConvenienceFields(rootVdev)
+	}
+
+	return status, nil
+}
+
+// populateVdevConvenienceFields recursively populates convenience fields for backward compatibility
+func populateVdevConvenienceFields(vdev *ZpoolVdev) {
+	// Convert error counts from string to uint64 for backward compatibility
+	vdev.ReadErrs, _ = parseErrorCount(vdev.ReadErrors)
+	vdev.WriteErrs, _ = parseErrorCount(vdev.WriteErrors)
+	vdev.CksumErrs, _ = parseErrorCount(vdev.ChecksumErrors)
+	vdev.SlowIOCount, _ = parseErrorCount(vdev.SlowIOs)
+
+	// Convert map to slice for Children field (backward compatibility)
+	vdev.Children = make([]*ZpoolVdev, 0, len(vdev.Vdevs))
+	for _, child := range vdev.Vdevs {
+		populateVdevConvenienceFields(child)
+		vdev.Children = append(vdev.Children, child)
+	}
+}
+
+// parseErrorCount converts error count string to uint64
+func parseErrorCount(errorStr string) (uint64, error) {
+	if errorStr == "" || errorStr == "-" {
+		return 0, nil
+	}
+	return strconv.ParseUint(errorStr, 10, 64)
 }
